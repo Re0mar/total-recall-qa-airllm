@@ -96,3 +96,46 @@ class LLMGenerator_hf_local:
         output_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
         
         return output_text, output_
+
+class LLMGenerator_airllm(LLMGenerator_hf_local):
+    """Same interface as LLMGenerator_hf_local, but runs the model with AirLLM
+    (layer-by-layer from disk). Inherits all stopping-criteria definitions."""
+
+    def __init__(self, model_name, generation_tokenizer, device, args):
+        from airllm import AutoModel as AirAutoModel
+        super().__init__(None, generation_tokenizer, device, args)
+        compression = os.environ.get("AIRLLM_COMPRESSION", "4bit") or None
+        shards = os.environ.get("AIRLLM_SHARDS", os.path.expanduser("~/data/airllm_shards"))
+        self.max_new_tokens_cap = int(os.environ.get("AIRLLM_MAX_NEW_TOKENS", "1024"))
+        print(f"[airllm] loading {model_name} (compression={compression})", flush=True)
+        self.generator = AirAutoModel.from_pretrained(
+            model_name,
+            compression=compression,
+            layer_shards_saving_path=os.path.join(shards, model_name.replace("/", "__")),
+        )
+
+    def generate(self, messages, stopping_criteria=None, max_new_tokens=1024,
+                 do_sample=True, temperature=0.7):
+        input_prompt = self.tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=False
+        )
+        input_ids = self.tokenizer.encode(input_prompt, return_tensors='pt').to("cuda")
+
+        kwargs = dict(
+            max_new_tokens=min(max_new_tokens, self.max_new_tokens_cap),
+            stopping_criteria=stopping_criteria,
+            pad_token_id=self.tokenizer.eos_token_id,
+            use_cache=True,
+            do_sample=do_sample,
+        )
+        if do_sample:
+            kwargs["temperature"] = temperature
+
+        # No attention_mask: single unpadded sequence, and AirLLM examples omit it.
+        outputs = self.generator.generate(input_ids, **kwargs)
+        if hasattr(outputs, "sequences"):
+            outputs = outputs.sequences
+        output_ = outputs[0]
+        generated_tokens = output_[input_ids.shape[1]:]
+        output_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        return output_text, output_

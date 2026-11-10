@@ -8,7 +8,7 @@ import transformers
 from bs4 import BeautifulSoup
 
 from utils.general_utils import passages2string
-from c5_task_evaluation.src.llm_generator import LLMGenerator_api, LLMGenerator_hf_local, StopOnSequence
+from c5_task_evaluation.src.llm_generator import LLMGenerator_airllm, LLMGenerator_api, LLMGenerator_hf_local, StopOnSequence
 from c5_task_evaluation.src.retrieval_models_local import BM25Retriever, RerankRetriever, DenseRetriever, OracleRetriever, PrecomputedRetriever
 from c5_task_evaluation.prompts.prompt_templetes import (
     SYSTEM_PROMPT_NO_RETRIEVAL,
@@ -31,9 +31,12 @@ class BasicRAG:
         if args.model_source == 'api':
             self.generator = LLMGenerator_api(args.model_name_or_path)
         elif args.model_source == 'hf_local':
-            backbone_model = transformers.AutoModelForCausalLM.from_pretrained(args.model_name_or_path, dtype=torch.bfloat16).to(device) # attn_implementation="eager"
             backbone_tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name_or_path)
-            self.generator = LLMGenerator_hf_local(backbone_model, backbone_tokenizer, device, args)
+            if os.environ.get('AIRLLM_MODEL') == args.model_name_or_path:
+                self.generator = LLMGenerator_airllm(args.model_name_or_path, backbone_tokenizer, device, args)
+            else:
+                backbone_model = transformers.AutoModelForCausalLM.from_pretrained(args.model_name_or_path, dtype=torch.bfloat16).to(device)
+                self.generator = LLMGenerator_hf_local(backbone_model, backbone_tokenizer, device, args)
         else:
             raise NotImplementedError
         
